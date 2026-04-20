@@ -25,7 +25,7 @@ export async function handleTelegramUpdate(update, env) {
   // Handle /start
   if (text === '/start') {
     if (isAdmin) {
-      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add new artist\n/listartists - Show all artists\n/addalbum - Add album\n/addtrack - Upload track\n/stats - Show statistics');
+      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add new artist\n/listartists - Show all artists\n/addalbum - Add album\n/addtrack - Upload track\n/stats - Show statistics\n/cancel - Cancel operation');
     } else {
       await sendMessage(env, chatId, '🎵 Welcome to Zambian Music Updates!\n\nRequest songs in the group and I will deliver them here.');
     }
@@ -37,7 +37,7 @@ export async function handleTelegramUpdate(update, env) {
     await handleAdminCommand(env, chatId, userId, text, msg);
   }
   
-  // Handle pending steps
+  // Handle pending steps (always after commands)
   if (pendingActions.has(userId)) {
     await handleAdminSteps(env, chatId, userId, text, msg);
   }
