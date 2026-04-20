@@ -11,7 +11,3 @@ database_id = "1826893b-c4ab-458e-a195-93e40ebef074"
 # Variables (these will be secrets in production)
 [vars]
 SITE_DOMAIN = "music.zedtopvibes.com"
-
-# Routes
-[[routes]]
-pattern = "music.zedtopvibes.com"
