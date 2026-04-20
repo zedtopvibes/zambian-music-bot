@@ -1,6 +1,6 @@
 // Cloudflare Worker for Zambian Music Updates Bot
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env, ctx) { 
     const url = new URL(request.url);
     const path = url.pathname;
     
