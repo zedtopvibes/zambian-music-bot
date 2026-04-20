@@ -1,4 +1,4 @@
-// Single file bot - Zambian Music Updates with Metadata Extraction
+// Single file bot - Zambian Music Updates with Metadata Extraction & Bulk Upload
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -58,7 +58,7 @@ async function handleUpdate(update, env) {
   
   // Handle /start
   if (text === '/start') {
-    await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/addtrack - Add track\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel operation');
+    await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/addtrack - Add single track\n/multitrack - Bulk upload multiple tracks\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel operation');
     return;
   }
   
@@ -110,6 +110,30 @@ async function handleUpdate(update, env) {
     pending.set(userId, { 
       step: 'track_artist', 
       artists: artists.results 
+    });
+    await sendMessage(env, chatId, list);
+    return;
+  }
+  
+  // Handle /multitrack - Bulk upload multiple files
+  if (text === '/multitrack') {
+    const db = env.DB;
+    const artists = await db.prepare('SELECT id, name FROM artists ORDER BY name').all();
+    
+    if (!artists.results || artists.results.length === 0) {
+      await sendMessage(env, chatId, 'No artists. Use /addartist first.');
+      return;
+    }
+    
+    let list = 'Select artist by number:\n\n';
+    for (let i = 0; i < artists.results.length; i++) {
+      list += `${i + 1}. ${artists.results[i].name}\n`;
+    }
+    
+    pending.set(userId, { 
+      step: 'multitrack_artist', 
+      artists: artists.results,
+      tracks: []
     });
     await sendMessage(env, chatId, list);
     return;
@@ -234,7 +258,7 @@ async function handleUpdate(update, env) {
       return;
     }
     
-    // ========== ADD TRACK ==========
+    // ========== ADD TRACK (SINGLE) ==========
     if (action.step === 'track_artist') {
       const choice = parseInt(text);
       const artists = action.artists;
@@ -300,9 +324,7 @@ async function handleUpdate(update, env) {
     }
     
     if (action.step === 'track_title') {
-      // Check if user sent audio directly instead of title
       if (msg.audio) {
-        // Jump directly to audio processing
         await processAudioFile(msg, env, chatId, userId, {
           artistId: action.artistId,
           artistName: action.artistName,
@@ -335,11 +357,144 @@ async function handleUpdate(update, env) {
       await processAudioFile(msg, env, chatId, userId, action);
       return;
     }
+    
+    // ========== MULTI TRACK BULK UPLOAD ==========
+    if (action.step === 'multitrack_artist') {
+      const choice = parseInt(text);
+      const artists = action.artists;
+      
+      if (isNaN(choice) || choice < 1 || choice > artists.length) {
+        await sendMessage(env, chatId, `Send number between 1 and ${artists.length}`);
+        return;
+      }
+      
+      const selected = artists[choice - 1];
+      
+      const db = env.DB;
+      const albums = await db.prepare('SELECT id, name FROM albums WHERE artist_id = ? ORDER BY name').bind(selected.id).all();
+      
+      pending.set(userId, {
+        step: 'multitrack_album',
+        artistId: selected.id,
+        artistName: selected.name,
+        albums: albums.results || [],
+        tracks: []
+      });
+      
+      let albumList = 'Select album (or send "new" to create one):\n\n';
+      for (let i = 0; i < albums.results.length; i++) {
+        albumList += `${i + 1}. ${albums.results[i].name}\n`;
+      }
+      albumList += '\nSend "new" to create a new album\nSend "cancel" to stop';
+      
+      await sendMessage(env, chatId, albumList);
+      return;
+    }
+    
+    if (action.step === 'multitrack_album') {
+      const input = text.trim().toLowerCase();
+      
+      if (input === 'cancel') {
+        pending.delete(userId);
+        await sendMessage(env, chatId, 'Bulk upload cancelled.');
+        return;
+      }
+      
+      let albumId = null;
+      let albumName = null;
+      
+      if (input === 'new') {
+        pending.set(userId, {
+          step: 'multitrack_new_album',
+          artistId: action.artistId,
+          artistName: action.artistName,
+          tracks: []
+        });
+        await sendMessage(env, chatId, 'Send me the NEW ALBUM NAME:');
+        return;
+      }
+      
+      const choice = parseInt(input);
+      const albums = action.albums;
+      
+      if (isNaN(choice) || choice < 1 || choice > albums.length) {
+        await sendMessage(env, chatId, `Send number between 1 and ${albums.length}, "new", or "cancel"`);
+        return;
+      }
+      
+      albumId = albums[choice - 1].id;
+      albumName = albums[choice - 1].name;
+      
+      pending.set(userId, {
+        step: 'multitrack_upload',
+        artistId: action.artistId,
+        artistName: action.artistName,
+        albumId: albumId,
+        albumName: albumName,
+        tracks: []
+      });
+      
+      await sendMessage(env, chatId, `📀 Album: ${albumName}\n\nNow send me ALL audio files for this album.\nYou can send multiple files at once.\n\nSend /done when finished.\nSend /cancel to stop.`);
+      return;
+    }
+    
+    if (action.step === 'multitrack_new_album') {
+      const albumName = text.trim();
+      
+      if (!albumName) {
+        await sendMessage(env, chatId, 'Send a valid album name.');
+        return;
+      }
+      
+      const db = env.DB;
+      
+      try {
+        await db.prepare('INSERT INTO albums (name, artist_id) VALUES (?, ?)').bind(albumName, action.artistId).run();
+        
+        const newAlbum = await db.prepare('SELECT id FROM albums WHERE name = ? AND artist_id = ?').bind(albumName, action.artistId).first();
+        
+        pending.set(userId, {
+          step: 'multitrack_upload',
+          artistId: action.artistId,
+          artistName: action.artistName,
+          albumId: newAlbum.id,
+          albumName: albumName,
+          tracks: []
+        });
+        
+        await sendMessage(env, chatId, `✅ Album "${albumName}" created!\n\nNow send me ALL audio files for this album.\n\nSend /done when finished.\nSend /cancel to stop.`);
+      } catch (error) {
+        await sendMessage(env, chatId, `❌ Error: ${error.message}`);
+      }
+      return;
+    }
+    
+    if (action.step === 'multitrack_upload') {
+      if (text === '/done') {
+        const trackCount = action.tracks.length;
+        await sendMessage(env, chatId, `✅ Bulk upload complete!\n\n📀 ${action.albumName}\n🎤 ${action.artistName}\n🎵 ${trackCount} tracks added.`);
+        pending.delete(userId);
+        return;
+      }
+      
+      if (text === '/cancel') {
+        await sendMessage(env, chatId, `Bulk upload cancelled. ${action.tracks.length} tracks were saved.`);
+        pending.delete(userId);
+        return;
+      }
+      
+      if (msg.audio) {
+        await processBulkAudio(msg, env, chatId, userId, action);
+        return;
+      }
+      
+      await sendMessage(env, chatId, 'Send audio files, /done when finished, or /cancel to stop.');
+      return;
+    }
   }
   
-  // Handle audio sent without going through /addtrack
+  // Handle audio sent directly
   if (msg.audio && pending.has(userId)) {
-    // Already handled above
     return;
   }
   
@@ -349,7 +504,7 @@ async function handleUpdate(update, env) {
   }
 }
 
-// Process audio file with metadata extraction
+// Process single audio file with metadata extraction
 async function processAudioFile(msg, env, chatId, userId, action) {
   if (!msg.audio) {
     await sendMessage(env, chatId, 'Please send an AUDIO file (MP3).');
@@ -360,12 +515,10 @@ async function processAudioFile(msg, env, chatId, userId, action) {
   const fileId = audio.file_id;
   const duration = audio.duration;
   
-  // EXTRACT METADATA FROM AUDIO FILE
   let extractedArtist = audio.performer || null;
   let extractedTitle = audio.title || null;
   let fileName = audio.file_name || '';
   
-  // Try to extract from filename if no metadata
   if (!extractedTitle && fileName) {
     const extracted = extractFromFilename(fileName);
     if (extracted) {
@@ -373,34 +526,21 @@ async function processAudioFile(msg, env, chatId, userId, action) {
       if (!extractedTitle) extractedTitle = extracted.title;
     }
     
-    // If still no title, use filename without extension
     if (!extractedTitle) {
       extractedTitle = fileName.replace(/\.mp3$/i, '');
     }
   }
   
-  // Use extracted values or fallback to user-provided
-  let trackTitle = action.trackTitle || extractedTitle;
-  let artistName = action.artistName;
-  let artistId = action.artistId;
-  let albumId = action.albumId;
+  let trackTitle = action.trackTitle || extractedTitle || 'Unknown Title';
   
-  // If metadata found, show what was detected
   let metadataMsg = '';
   if (extractedArtist && extractedTitle) {
-    metadataMsg = `\n\n📀 Detected from file: ${extractedArtist} - ${extractedTitle}`;
-    
-    // Optional: Check if detected artist matches selected artist
-    if (extractedArtist.toLowerCase() !== artistName.toLowerCase()) {
-      metadataMsg += `\n⚠️ Warning: Detected artist "${extractedArtist}" differs from selected "${artistName}"`;
-    }
+    metadataMsg = `\n\n📀 Detected: ${extractedArtist} - ${extractedTitle}`;
   } else if (extractedTitle) {
     metadataMsg = `\n\n📀 Detected title: ${extractedTitle}`;
-  } else if (fileName) {
-    metadataMsg = `\n\n📀 Filename: ${fileName}`;
   }
   
-  await sendMessage(env, chatId, `Processing audio file...${metadataMsg}\n\nArtist: ${artistName}\nTitle: ${trackTitle || extractedTitle}\n\nSaving...`);
+  await sendMessage(env, chatId, `Processing audio...${metadataMsg}\n\nArtist: ${action.artistName}\nTitle: ${trackTitle}\n\nSaving...`);
   
   const channelId = env.PRIVATE_CHANNEL_ID;
   const token = env.TELEGRAM_BOT_TOKEN;
@@ -412,7 +552,7 @@ async function processAudioFile(msg, env, chatId, userId, action) {
       body: JSON.stringify({
         chat_id: channelId,
         audio: fileId,
-        caption: `${artistName} - ${trackTitle || extractedTitle}\nDuration: ${duration}s`
+        caption: `${action.artistName} - ${trackTitle}\nDuration: ${duration}s`
       })
     });
     
@@ -420,15 +560,14 @@ async function processAudioFile(msg, env, chatId, userId, action) {
     
     if (forwardResult.ok) {
       const permanentFileId = forwardResult.result.audio.file_id;
-      const finalTitle = trackTitle || extractedTitle || 'Unknown Title';
       
       const db = env.DB;
       await db.prepare(`
         INSERT INTO tracks (file_id, title, artist_id, album_id, duration)
         VALUES (?, ?, ?, ?, ?)
-      `).bind(permanentFileId, finalTitle, artistId, albumId || null, duration).run();
+      `).bind(permanentFileId, trackTitle, action.artistId, action.albumId || null, duration).run();
       
-      await sendMessage(env, chatId, `✅ Track saved!\n\n🎵 ${finalTitle}\n🎤 ${artistName}\n⏱️ ${duration} seconds`);
+      await sendMessage(env, chatId, `✅ Track saved!\n\n🎵 ${trackTitle}\n🎤 ${action.artistName}\n⏱️ ${duration} seconds`);
     } else {
       await sendMessage(env, chatId, `❌ Failed: ${forwardResult.description || 'Unknown error'}`);
     }
@@ -439,9 +578,80 @@ async function processAudioFile(msg, env, chatId, userId, action) {
   pending.delete(userId);
 }
 
+// Process bulk audio files
+async function processBulkAudio(msg, env, chatId, userId, action) {
+  const audio = msg.audio;
+  const fileId = audio.file_id;
+  const duration = audio.duration;
+  
+  let extractedArtist = audio.performer || null;
+  let extractedTitle = audio.title || null;
+  let fileName = audio.file_name || '';
+  
+  if (!extractedTitle && fileName) {
+    const extracted = extractFromFilename(fileName);
+    if (extracted) {
+      if (!extractedArtist) extractedArtist = extracted.artist;
+      if (!extractedTitle) extractedTitle = extracted.title;
+    }
+    
+    if (!extractedTitle) {
+      extractedTitle = fileName.replace(/\.mp3$/i, '');
+    }
+  }
+  
+  let trackTitle = extractedTitle || 'Unknown Title';
+  
+  let detectionMsg = '';
+  if (extractedArtist && extractedTitle) {
+    detectionMsg = `📀 ${extractedArtist} - ${extractedTitle}`;
+  } else if (extractedTitle) {
+    detectionMsg = `📀 ${extractedTitle}`;
+  } else {
+    detectionMsg = `📀 ${fileName}`;
+  }
+  
+  await sendMessage(env, chatId, `Processing: ${detectionMsg}`);
+  
+  const channelId = env.PRIVATE_CHANNEL_ID;
+  const token = env.TELEGRAM_BOT_TOKEN;
+  
+  try {
+    const forwardResponse = await fetch(`https://api.telegram.org/bot${token}/sendAudio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: channelId,
+        audio: fileId,
+        caption: `${action.artistName} - ${trackTitle}\nAlbum: ${action.albumName}\nDuration: ${duration}s`
+      })
+    });
+    
+    const forwardResult = await forwardResponse.json();
+    
+    if (forwardResult.ok) {
+      const permanentFileId = forwardResult.result.audio.file_id;
+      
+      const db = env.DB;
+      await db.prepare(`
+        INSERT INTO tracks (file_id, title, artist_id, album_id, duration)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(permanentFileId, trackTitle, action.artistId, action.albumId, duration).run();
+      
+      action.tracks.push({ title: trackTitle });
+      pending.set(userId, action);
+      
+      await sendMessage(env, chatId, `✅ ${trackTitle} saved! (${action.tracks.length} total)`);
+    } else {
+      await sendMessage(env, chatId, `❌ Failed: ${trackTitle} - ${forwardResult.description || 'Unknown error'}`);
+    }
+  } catch (error) {
+    await sendMessage(env, chatId, `❌ Error: ${error.message}`);
+  }
+}
+
 // Extract metadata from filename
 function extractFromFilename(filename) {
-  // Pattern: Artist - Title.mp3
   const match = filename.match(/^(.+?)\s*-\s*(.+?)\.mp3$/i);
   if (match) {
     return {
@@ -450,7 +660,6 @@ function extractFromFilename(filename) {
     };
   }
   
-  // Pattern: Track Number - Title.mp3 (no artist)
   const match2 = filename.match(/^\d+\s*-\s*(.+?)\.mp3$/i);
   if (match2) {
     return {
