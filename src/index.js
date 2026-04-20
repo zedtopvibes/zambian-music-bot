@@ -1,4 +1,4 @@
-// Single file bot - Zambian Music Updates
+// Single file bot - Zambian Music Updates with Metadata Extraction
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -295,15 +295,27 @@ async function handleUpdate(update, env) {
         albumId: albumId
       });
       
-      await sendMessage(env, chatId, 'Send me the SONG TITLE:');
+      await sendMessage(env, chatId, 'Send me the SONG TITLE (or send audio file directly):');
       return;
     }
     
     if (action.step === 'track_title') {
+      // Check if user sent audio directly instead of title
+      if (msg.audio) {
+        // Jump directly to audio processing
+        await processAudioFile(msg, env, chatId, userId, {
+          artistId: action.artistId,
+          artistName: action.artistName,
+          albumId: action.albumId,
+          trackTitle: text.trim() || null
+        });
+        return;
+      }
+      
       const trackTitle = text.trim();
       
       if (!trackTitle) {
-        await sendMessage(env, chatId, 'Send a valid song title.');
+        await sendMessage(env, chatId, 'Send a valid song title or send audio file directly.');
         return;
       }
       
@@ -320,61 +332,134 @@ async function handleUpdate(update, env) {
     }
     
     if (action.step === 'track_audio') {
-      if (!msg.audio) {
-        await sendMessage(env, chatId, 'Please send an AUDIO file (MP3).');
-        return;
-      }
-      
-      const audio = msg.audio;
-      const fileId = audio.file_id;
-      const duration = audio.duration;
-      const trackTitle = action.trackTitle;
-      const artistName = action.artistName;
-      const albumId = action.albumId;
-      const artistId = action.artistId;
-      
-      const channelId = env.PRIVATE_CHANNEL_ID;
-      const token = env.TELEGRAM_BOT_TOKEN;
-      
-      try {
-        const forwardResponse = await fetch(`https://api.telegram.org/bot${token}/sendAudio`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: channelId,
-            audio: fileId,
-            caption: `${artistName} - ${trackTitle}\nDuration: ${duration}s`
-          })
-        });
-        
-        const forwardResult = await forwardResponse.json();
-        
-        if (forwardResult.ok) {
-          const permanentFileId = forwardResult.result.audio.file_id;
-          
-          const db = env.DB;
-          await db.prepare(`
-            INSERT INTO tracks (file_id, title, artist_id, album_id, duration)
-            VALUES (?, ?, ?, ?, ?)
-          `).bind(permanentFileId, trackTitle, artistId, albumId || null, duration).run();
-          
-          await sendMessage(env, chatId, `✅ Track saved!\n\n🎵 ${trackTitle}\n🎤 ${artistName}\n⏱️ ${duration} seconds`);
-        } else {
-          await sendMessage(env, chatId, `❌ Failed: ${forwardResult.description || 'Unknown error'}`);
-        }
-      } catch (error) {
-        await sendMessage(env, chatId, `❌ Error: ${error.message}`);
-      }
-      
-      pending.delete(userId);
+      await processAudioFile(msg, env, chatId, userId, action);
       return;
     }
+  }
+  
+  // Handle audio sent without going through /addtrack
+  if (msg.audio && pending.has(userId)) {
+    // Already handled above
+    return;
   }
   
   // Unknown command
   if (text && text.startsWith('/')) {
     await sendMessage(env, chatId, 'Unknown command. Send /start for menu.');
   }
+}
+
+// Process audio file with metadata extraction
+async function processAudioFile(msg, env, chatId, userId, action) {
+  if (!msg.audio) {
+    await sendMessage(env, chatId, 'Please send an AUDIO file (MP3).');
+    return;
+  }
+  
+  const audio = msg.audio;
+  const fileId = audio.file_id;
+  const duration = audio.duration;
+  
+  // EXTRACT METADATA FROM AUDIO FILE
+  let extractedArtist = audio.performer || null;
+  let extractedTitle = audio.title || null;
+  let fileName = audio.file_name || '';
+  
+  // Try to extract from filename if no metadata
+  if (!extractedTitle && fileName) {
+    const extracted = extractFromFilename(fileName);
+    if (extracted) {
+      if (!extractedArtist) extractedArtist = extracted.artist;
+      if (!extractedTitle) extractedTitle = extracted.title;
+    }
+    
+    // If still no title, use filename without extension
+    if (!extractedTitle) {
+      extractedTitle = fileName.replace(/\.mp3$/i, '');
+    }
+  }
+  
+  // Use extracted values or fallback to user-provided
+  let trackTitle = action.trackTitle || extractedTitle;
+  let artistName = action.artistName;
+  let artistId = action.artistId;
+  let albumId = action.albumId;
+  
+  // If metadata found, show what was detected
+  let metadataMsg = '';
+  if (extractedArtist && extractedTitle) {
+    metadataMsg = `\n\n📀 Detected from file: ${extractedArtist} - ${extractedTitle}`;
+    
+    // Optional: Check if detected artist matches selected artist
+    if (extractedArtist.toLowerCase() !== artistName.toLowerCase()) {
+      metadataMsg += `\n⚠️ Warning: Detected artist "${extractedArtist}" differs from selected "${artistName}"`;
+    }
+  } else if (extractedTitle) {
+    metadataMsg = `\n\n📀 Detected title: ${extractedTitle}`;
+  } else if (fileName) {
+    metadataMsg = `\n\n📀 Filename: ${fileName}`;
+  }
+  
+  await sendMessage(env, chatId, `Processing audio file...${metadataMsg}\n\nArtist: ${artistName}\nTitle: ${trackTitle || extractedTitle}\n\nSaving...`);
+  
+  const channelId = env.PRIVATE_CHANNEL_ID;
+  const token = env.TELEGRAM_BOT_TOKEN;
+  
+  try {
+    const forwardResponse = await fetch(`https://api.telegram.org/bot${token}/sendAudio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: channelId,
+        audio: fileId,
+        caption: `${artistName} - ${trackTitle || extractedTitle}\nDuration: ${duration}s`
+      })
+    });
+    
+    const forwardResult = await forwardResponse.json();
+    
+    if (forwardResult.ok) {
+      const permanentFileId = forwardResult.result.audio.file_id;
+      const finalTitle = trackTitle || extractedTitle || 'Unknown Title';
+      
+      const db = env.DB;
+      await db.prepare(`
+        INSERT INTO tracks (file_id, title, artist_id, album_id, duration)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(permanentFileId, finalTitle, artistId, albumId || null, duration).run();
+      
+      await sendMessage(env, chatId, `✅ Track saved!\n\n🎵 ${finalTitle}\n🎤 ${artistName}\n⏱️ ${duration} seconds`);
+    } else {
+      await sendMessage(env, chatId, `❌ Failed: ${forwardResult.description || 'Unknown error'}`);
+    }
+  } catch (error) {
+    await sendMessage(env, chatId, `❌ Error: ${error.message}`);
+  }
+  
+  pending.delete(userId);
+}
+
+// Extract metadata from filename
+function extractFromFilename(filename) {
+  // Pattern: Artist - Title.mp3
+  const match = filename.match(/^(.+?)\s*-\s*(.+?)\.mp3$/i);
+  if (match) {
+    return {
+      artist: match[1].trim(),
+      title: match[2].trim()
+    };
+  }
+  
+  // Pattern: Track Number - Title.mp3 (no artist)
+  const match2 = filename.match(/^\d+\s*-\s*(.+?)\.mp3$/i);
+  if (match2) {
+    return {
+      artist: null,
+      title: match2[1].trim()
+    };
+  }
+  
+  return null;
 }
 
 async function sendMessage(env, chatId, text) {
