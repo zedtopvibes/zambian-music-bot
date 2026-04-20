@@ -62,6 +62,26 @@ async function handleUpdate(update, env) {
     return;
   }
   
+  // Handle /cancel and /done FIRST (before any other command checks)
+  if (text === '/cancel') {
+    pending.delete(userId);
+    await sendMessage(env, chatId, 'Operation cancelled.');
+    return;
+  }
+  
+  // Handle /done - important for bulk upload
+  if (text === '/done') {
+    // Check if user has a pending bulk upload
+    const action = pending.get(userId);
+    if (action && action.step === 'multitrack_upload') {
+      // Let the pending handler process it
+      // Do nothing here, let it go to pending handler
+    } else {
+      await sendMessage(env, chatId, 'No active bulk upload. Use /multitrack to start.');
+      return;
+    }
+  }
+  
   // Handle /addartist
   if (text === '/addartist') {
     pending.set(userId, { step: 'artist_name' });
@@ -191,13 +211,6 @@ async function handleUpdate(update, env) {
     const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks').first();
     
     await sendMessage(env, chatId, `📊 STATISTICS\n\n🎤 Artists: ${artistCount?.count || 0}\n💿 Albums: ${albumCount?.count || 0}\n🎵 Tracks: ${trackCount?.count || 0}`);
-    return;
-  }
-  
-  // Handle /cancel
-  if (text === '/cancel') {
-    pending.delete(userId);
-    await sendMessage(env, chatId, 'Operation cancelled.');
     return;
   }
   
@@ -434,7 +447,7 @@ async function handleUpdate(update, env) {
         tracks: []
       });
       
-      await sendMessage(env, chatId, `📀 Album: ${albumName}\n\nNow send me ALL audio files for this album.\nYou can send multiple files at once.\n\nSend /done when finished.\nSend /cancel to stop.`);
+      await sendMessage(env, chatId, `📀 Album: ${albumName}\n\nNow send me ALL audio files for this album.\nYou can send multiple files one after another.\n\nSend /done when finished.\nSend /cancel to stop.`);
       return;
     }
     
@@ -491,11 +504,6 @@ async function handleUpdate(update, env) {
       await sendMessage(env, chatId, 'Send audio files, /done when finished, or /cancel to stop.');
       return;
     }
-  }
-  
-  // Handle audio sent directly
-  if (msg.audio && pending.has(userId)) {
-    return;
   }
   
   // Unknown command
