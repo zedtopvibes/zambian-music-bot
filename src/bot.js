@@ -32,13 +32,48 @@ export async function handleTelegramUpdate(update, env) {
     return;
   }
   
-  // Handle admin commands
+  // Handle ALL admin commands - moved outside the text check
   if (isAdmin) {
-    await handleAdminCommand(env, chatId, userId, text, msg);
+    // Check for each command
+    if (text === '/addartist') {
+      await handleAdminCommand(env, chatId, userId, text, msg);
+      return;
+    }
+    
+    if (text === '/addalbum') {
+      await handleAdminCommand(env, chatId, userId, text, msg);
+      return;
+    }
+    
+    if (text === '/addtrack') {
+      await handleAdminCommand(env, chatId, userId, text, msg);
+      return;
+    }
+    
+    if (text === '/listartists') {
+      await handleAdminCommand(env, chatId, userId, text, msg);
+      return;
+    }
+    
+    if (text === '/stats') {
+      await handleAdminCommand(env, chatId, userId, text, msg);
+      return;
+    }
+    
+    if (text === '/cancel') {
+      await handleAdminCommand(env, chatId, userId, text, msg);
+      return;
+    }
   }
   
-  // Handle pending steps (always after commands)
+  // Handle pending steps (for multi-step operations)
   if (pendingActions.has(userId)) {
     await handleAdminSteps(env, chatId, userId, text, msg);
+    return;
+  }
+  
+  // Unknown command
+  if (text && text.startsWith('/')) {
+    await sendMessage(env, chatId, 'Unknown command. Send /start for help.');
   }
 }
