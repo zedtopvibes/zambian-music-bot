@@ -1,6 +1,6 @@
 import { pendingActions } from './bot.js';
 import { sendMessage } from './utils.js';
-import { addArtist, addAlbum, addTrack, listArtists, listAlbums, showStats } from './commands.js';
+import { addArtist, addAlbum, addTrack, getArtistsList, getAlbumsList, listArtists, showStats } from './commands.js';
 
 export async function handleAdminCommand(env, chatId, userId, text, msg) {
   // /addartist
@@ -12,8 +12,7 @@ export async function handleAdminCommand(env, chatId, userId, text, msg) {
   
   // /addalbum
   if (text === '/addalbum') {
-    // First get list of artists
-    const artists = await listArtistsSimple(env);
+    const artists = await getArtistsList(env);
     if (!artists || artists.length === 0) {
       await sendMessage(env, chatId, 'No artists found. Use /addartist first.');
       return;
@@ -31,8 +30,7 @@ export async function handleAdminCommand(env, chatId, userId, text, msg) {
   
   // /addtrack
   if (text === '/addtrack') {
-    // First get list of artists
-    const artists = await listArtistsSimple(env);
+    const artists = await getArtistsList(env);
     if (!artists || artists.length === 0) {
       await sendMessage(env, chatId, 'No artists found. Use /addartist first.');
       return;
@@ -70,6 +68,7 @@ export async function handleAdminCommand(env, chatId, userId, text, msg) {
 
 export async function handleAdminSteps(env, chatId, userId, text, msg) {
   const action = pendingActions.get(userId);
+  if (!action) return;
   
   // Step: Waiting for artist name (/addartist)
   if (action.step === 'waiting_artist_name') {
@@ -146,9 +145,7 @@ export async function handleAdminSteps(env, chatId, userId, text, msg) {
     }
     
     const selectedArtist = artists[choice - 1];
-    
-    // Now get albums for this artist
-    const albums = await listAlbumsSimple(env, selectedArtist.id);
+    const albums = await getAlbumsList(env, selectedArtist.id);
     
     pendingActions.set(userId, { 
       step: 'waiting_track_album', 
@@ -167,7 +164,6 @@ export async function handleAdminSteps(env, chatId, userId, text, msg) {
     } else {
       await sendMessage(env, chatId, `No albums found for ${selectedArtist.name}. Send "none" to continue without album, or use /addalbum first.`);
     }
-    
     return;
   }
   
@@ -236,7 +232,6 @@ export async function handleAdminSteps(env, chatId, userId, text, msg) {
     const duration = audio.duration;
     const fileName = audio.file_name || `${action.trackTitle}.mp3`;
     
-    // Forward to private channel
     const channelId = env.PRIVATE_CHANNEL_ID;
     const token = env.TELEGRAM_BOT_TOKEN;
     
@@ -257,7 +252,6 @@ export async function handleAdminSteps(env, chatId, userId, text, msg) {
       if (forwardResult.ok) {
         const permanentFileId = forwardResult.result.audio.file_id;
         
-        // Save to database
         const success = await addTrack(env, permanentFileId, action.trackTitle, action.artistId, action.albumId, duration);
         
         if (success) {
@@ -277,16 +271,4 @@ export async function handleAdminSteps(env, chatId, userId, text, msg) {
   }
   
   pendingActions.delete(userId);
-}
-
-async function listArtistsSimple(env) {
-  const db = env.DB;
-  const artists = await db.prepare('SELECT id, name FROM artists ORDER BY name').all();
-  return artists.results || [];
-}
-
-async function listAlbumsSimple(env, artistId) {
-  const db = env.DB;
-  const albums = await db.prepare('SELECT id, name FROM albums WHERE artist_id = ? ORDER BY name').bind(artistId).all();
-  return albums.results || [];
 }
