@@ -1,25 +1,21 @@
-// Zambian Music Updates Bot - Cloudflare Worker
-
+// Single file bot - Zambian Music Updates
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     
-    // Homepage
     if (path === '/') {
       return new Response('✅ Zambian Music Bot is running!', {
         headers: { 'Content-Type': 'text/plain' }
       });
     }
     
-    // Telegram webhook
     if (path === '/webhook' && request.method === 'POST') {
       const update = await request.json();
-      await handleTelegramUpdate(update, env);
+      await handleUpdate(update, env);
       return new Response('OK');
     }
     
-    // Setup webhook (visit once)
     if (path === '/setup') {
       const webhookUrl = `https://${url.hostname}/webhook`;
       const token = env.TELEGRAM_BOT_TOKEN;
@@ -40,138 +36,141 @@ export default {
   }
 };
 
-// Store pending admin actions (simple in-memory)
-const pendingActions = new Map();
+// Store pending actions
+const pending = new Map();
 
-async function handleTelegramUpdate(update, env) {
-  // Handle messages
-  if (update.message) {
-    const msg = update.message;
-    const chatId = msg.chat.id;
-    const text = msg.text || '';
-    const userId = msg.from.id.toString();
-    const username = msg.from.username || '';
-    const firstName = msg.from.first_name || '';
-    
-    // Check if user is admin
-    const adminIds = env.ADMIN_IDS ? env.ADMIN_IDS.split(',') : [];
-    const isAdmin = adminIds.includes(userId);
-    
-    // Register user in database
-    await registerUser(env, userId, username, firstName, isAdmin);
-    
-    // Handle commands
-    if (text === '/start') {
-      if (isAdmin) {
-        await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add new artist\n/listartists - Show all artists\n/addalbum - Add album\n/addtrack - Upload track\n/stats - Show statistics');
-      } else {
-        await sendMessage(env, chatId, '🎵 Welcome to Zambian Music Updates!\n\nRequest songs in the group and I will deliver them here.');
-      }
-      return;
-    }
-    
-    if (text === '/addartist' && isAdmin) {
-      pendingActions.set(userId, { step: 'waiting_artist_name' });
-      await sendMessage(env, chatId, 'Send me the ARTIST NAME.\n\nExample: Michael Jackson');
-      return;
-    }
-    
-    if (text === '/listartists' && isAdmin) {
-      await listArtists(env, chatId);
-      return;
-    }
-    
-    if (text === '/stats' && isAdmin) {
-      await showStats(env, chatId);
-      return;
-    }
-    
-    if (text === '/cancel' && isAdmin) {
-      pendingActions.delete(userId);
-      await sendMessage(env, chatId, 'Operation cancelled.');
-      return;
-    }
-    
-    // Handle pending steps
-    if (pendingActions.has(userId)) {
-      await handlePendingStep(env, chatId, userId, text, msg);
-      return;
-    }
-    
-    // Unknown command
-    if (text.startsWith('/')) {
-      await sendMessage(env, chatId, 'Unknown command. Send /start for help.');
-    }
-  }
-}
-
-async function handlePendingStep(env, chatId, userId, text, msg) {
-  const action = pendingActions.get(userId);
+async function handleUpdate(update, env) {
+  if (!update.message) return;
   
-  // Step: Waiting for artist name
-  if (action.step === 'waiting_artist_name') {
-    const artistName = text.trim();
+  const msg = update.message;
+  const chatId = msg.chat.id;
+  const text = msg.text || '';
+  const userId = msg.from.id.toString();
+  
+  // Check admin
+  const adminIds = env.ADMIN_IDS ? env.ADMIN_IDS.split(',') : [];
+  const isAdmin = adminIds.includes(userId);
+  
+  if (!isAdmin) {
+    await sendMessage(env, chatId, 'You are not authorized to use this bot.');
+    return;
+  }
+  
+  // Handle /start
+  if (text === '/start') {
+    await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/listartists - Show artists');
+    return;
+  }
+  
+  // Handle /addartist
+  if (text === '/addartist') {
+    pending.set(userId, { step: 'artist_name' });
+    await sendMessage(env, chatId, 'Send me the ARTIST NAME:');
+    return;
+  }
+  
+  // Handle /addalbum
+  if (text === '/addalbum') {
+    const db = env.DB;
+    const artists = await db.prepare('SELECT id, name FROM artists ORDER BY name').all();
     
-    if (!artistName) {
-      await sendMessage(env, chatId, 'Please send a valid artist name.');
+    if (!artists.results || artists.results.length === 0) {
+      await sendMessage(env, chatId, 'No artists. Use /addartist first.');
       return;
     }
     
-    const db = env.DB;
+    let list = 'Select artist by number:\n\n';
+    for (let i = 0; i < artists.results.length; i++) {
+      list += `${i + 1}. ${artists.results[i].name}\n`;
+    }
     
-    try {
-      await db.prepare('INSERT INTO artists (name) VALUES (?)').bind(artistName).run();
-      await sendMessage(env, chatId, `✅ Artist "${artistName}" added!\n\nUse /addalbum to add albums or /addtrack to upload songs.`);
-    } catch (error) {
-      if (error.message.includes('UNIQUE')) {
-        await sendMessage(env, chatId, `❌ Artist "${artistName}" already exists.`);
-      } else {
+    pending.set(userId, { 
+      step: 'album_artist', 
+      artists: artists.results 
+    });
+    await sendMessage(env, chatId, list);
+    return;
+  }
+  
+  // Handle /listartists
+  if (text === '/listartists') {
+    const db = env.DB;
+    const artists = await db.prepare('SELECT id, name FROM artists ORDER BY name').all();
+    
+    if (!artists.results || artists.results.length === 0) {
+      await sendMessage(env, chatId, 'No artists yet.');
+      return;
+    }
+    
+    let list = '🎤 ARTISTS:\n\n';
+    for (const artist of artists.results) {
+      list += `• ${artist.name}\n`;
+    }
+    await sendMessage(env, chatId, list);
+    return;
+  }
+  
+  // Handle pending steps
+  if (pending.has(userId)) {
+    const action = pending.get(userId);
+    
+    // Add artist - waiting for name
+    if (action.step === 'artist_name') {
+      const artistName = text.trim();
+      const db = env.DB;
+      
+      try {
+        await db.prepare('INSERT INTO artists (name) VALUES (?)').bind(artistName).run();
+        await sendMessage(env, chatId, `✅ Artist "${artistName}" added!`);
+      } catch (error) {
         await sendMessage(env, chatId, `❌ Error: ${error.message}`);
       }
+      
+      pending.delete(userId);
+      return;
     }
     
-    pendingActions.delete(userId);
-    return;
+    // Add album - waiting for artist selection
+    if (action.step === 'album_artist') {
+      const choice = parseInt(text);
+      const artists = action.artists;
+      
+      if (isNaN(choice) || choice < 1 || choice > artists.length) {
+        await sendMessage(env, chatId, `Send number between 1 and ${artists.length}`);
+        return;
+      }
+      
+      const selected = artists[choice - 1];
+      
+      pending.set(userId, {
+        step: 'album_name',
+        artistId: selected.id,
+        artistName: selected.name
+      });
+      
+      await sendMessage(env, chatId, `Selected: ${selected.name}\n\nSend ALBUM NAME:`);
+      return;
+    }
+    
+    // Add album - waiting for album name
+    if (action.step === 'album_name') {
+      const albumName = text.trim();
+      const db = env.DB;
+      
+      try {
+        await db.prepare('INSERT INTO albums (name, artist_id) VALUES (?, ?)').bind(albumName, action.artistId).run();
+        await sendMessage(env, chatId, `✅ Album "${albumName}" added to ${action.artistName}!`);
+      } catch (error) {
+        await sendMessage(env, chatId, `❌ Error: ${error.message}`);
+      }
+      
+      pending.delete(userId);
+      return;
+    }
   }
   
-  pendingActions.delete(userId);
-}
-
-async function listArtists(env, chatId) {
-  const db = env.DB;
-  const artists = await db.prepare('SELECT id, name FROM artists ORDER BY name').all();
-  
-  if (!artists.results || artists.results.length === 0) {
-    await sendMessage(env, chatId, 'No artists yet. Use /addartist to add one.');
-    return;
-  }
-  
-  let message = '🎤 ARTISTS:\n\n';
-  for (const artist of artists.results) {
-    const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks WHERE artist_id = ?').bind(artist.id).first();
-    message += `• ${artist.name} (${trackCount?.count || 0} songs)\n`;
-  }
-  
-  await sendMessage(env, chatId, message);
-}
-
-async function showStats(env, chatId) {
-  const db = env.DB;
-  
-  const artistCount = await db.prepare('SELECT COUNT(*) as count FROM artists').first();
-  const albumCount = await db.prepare('SELECT COUNT(*) as count FROM albums').first();
-  const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks').first();
-  
-  await sendMessage(env, chatId, `📊 STATISTICS\n\n🎤 Artists: ${artistCount?.count || 0}\n💿 Albums: ${albumCount?.count || 0}\n🎵 Tracks: ${trackCount?.count || 0}`);
-}
-
-async function registerUser(env, tgId, username, firstName, isAdmin) {
-  const db = env.DB;
-  
-  await db.prepare(`
-    INSERT OR IGNORE INTO users (tg_id, username, first_name, is_admin)
-    VALUES (?, ?, ?, ?)
-  `).bind(tgId, username || '', firstName || '', isAdmin ? 1 : 0).run();
+  // Unknown command
+  await sendMessage(env, chatId, 'Unknown command. Send /start for menu.');
 }
 
 async function sendMessage(env, chatId, text) {
@@ -182,12 +181,9 @@ async function sendMessage(env, chatId, text) {
     await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text
-      })
+      body: JSON.stringify({ chat_id: chatId, text: text })
     });
   } catch (error) {
-    console.error('Send message error:', error);
+    console.error('Send error:', error);
   }
 }
