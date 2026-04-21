@@ -3,52 +3,84 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     
-    // Test endpoint for AI
-    if (path === '/test-ai') {
-      const text = url.searchParams.get('text') || 'I want Yo Maps Komando';
-      
-      try {
-        const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-          messages: [
-            {
-              role: 'system',
-              content: 'You extract artist and album names from music requests. Respond ONLY with JSON: {"artist": "artist name", "album": "album name"}. If missing, use "unknown".'
-            },
-            {
-              role: 'user',
-              content: text
-            }
-          ]
-        });
-        
-        return new Response(JSON.stringify({
-          success: true,
-          input: text,
-          output: aiResponse,
-          parsed: aiResponse.response
-        }, null, 2), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({
-          success: false,
-          error: error.message
-        }, null, 2), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-    
-    // Homepage
     if (path === '/') {
-      return new Response('AI Test Bot - Go to /test-ai?text=your request');
+      return new Response('Bot is alive! 🟢');
     }
     
-    // Telegram webhook (optional)
     if (path === '/webhook' && request.method === 'POST') {
+      const update = await request.json();
+      await handleUpdate(update, env);
       return new Response('OK');
+    }
+    
+    if (path === '/setup') {
+      const webhookUrl = `https://${url.hostname}/webhook`;
+      const token = env.TELEGRAM_BOT_TOKEN;
+      
+      const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: webhookUrl })
+      });
+      
+      const result = await response.json();
+      return new Response(JSON.stringify(result, null, 2));
     }
     
     return new Response('Not found', { status: 404 });
   }
 };
+
+async function handleUpdate(update, env) {
+  if (!update.message) return;
+  
+  const msg = update.message;
+  const chatId = msg.chat.id;
+  const text = msg.text || '';
+  const messageId = msg.message_id;
+  
+  // Show typing indicator
+  await sendChatAction(env, chatId);
+  
+  // Use AI to respond to any message
+  try {
+    const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a friendly music assistant for Zambian Music Updates. Keep responses short and helpful. If someone requests a song, tell them to use "I want Artist - Album" format.'
+        },
+        {
+          role: 'user',
+          content: text
+        }
+      ]
+    });
+    
+    await replyToMessage(env, chatId, messageId, aiResponse.response);
+  } catch (error) {
+    await replyToMessage(env, chatId, messageId, `🤖 AI Error: ${error.message}`);
+  }
+}
+
+async function sendChatAction(env, chatId) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, action: 'typing' })
+  });
+}
+
+async function replyToMessage(env, chatId, replyToMessageId, text) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      reply_to_message_id: replyToMessageId
+    })
+  });
+}
