@@ -1,4 +1,4 @@
-// Single file bot - Zambian Music Updates with Request System
+// Single file bot - Zambian Music Updates
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -10,14 +10,13 @@ export default {
         status: 302,
         headers: { 'Location': 'https://t.me/zambianmusicupdatesbot' }
       });
-    } 
+    }
     
     // Album page
     if (path === '/album') {
       const albumId = url.searchParams.get('id');
-      const allowedUser = url.searchParams.get('user');
       if (albumId) {
-        return await serveAlbumPage(env, albumId, allowedUser);
+        return await serveAlbumPage(env, albumId);
       }
       return new Response('Album ID required', { status: 400 });
     }
@@ -50,8 +49,8 @@ export default {
   }
 };
 
-// Serve single album page with user check
-async function serveAlbumPage(env, albumId, allowedUserId) {
+// Serve single album page
+async function serveAlbumPage(env, albumId) {
   const db = env.DB;
   
   const album = await db.prepare(`
@@ -71,8 +70,6 @@ async function serveAlbumPage(env, albumId, allowedUserId) {
     WHERE album_id = ?
     ORDER BY id
   `).bind(albumId).all();
-  
-  const botLink = `https://t.me/zambianmusicupdatesbot?start=album_${album.id}_user_${allowedUserId || ''}`;
   
   const html = `<!DOCTYPE html>
 <html>
@@ -161,7 +158,7 @@ async function serveAlbumPage(env, albumId, allowedUserId) {
         📢 Advertisement Space<br>
         <small>Your ad here</small>
       </div>
-      <a href="${botLink}" class="telegram-btn">
+      <a href="https://t.me/zambianmusicupdatesbot?start=album_${album.id}" class="telegram-btn">
         📀 Get all tracks on Telegram
       </a>
     </div>
@@ -185,88 +182,29 @@ async function handleUpdate(update, env) {
   const chatId = msg.chat.id;
   const text = msg.text || '';
   const userId = msg.from.id.toString();
-  const username = msg.from.username || '';
-  const firstName = msg.from.first_name || '';
   
   const adminIds = env.ADMIN_IDS ? env.ADMIN_IDS.split(',') : [];
   const isAdmin = adminIds.includes(userId);
   
-  // Check if this is a group message (for requests)
-  const isGroup = chatId.toString().startsWith('-');
-  
-  // Handle /start with album and user parameter
+  // Handle /start with album
   if (text && text.startsWith('/start')) {
     const param = text.split(' ')[1];
     if (param && param.startsWith('album_')) {
-      const parts = param.split('_');
-      const albumId = parts[1];
-      const allowedUserId = parts[3];
-      
-      if (allowedUserId && userId !== allowedUserId) {
-        await sendMessage(env, chatId, '❌ This track is not for you.\n\nOnly the person who requested this album can access it.');
-        return;
-      }
-      
+      const albumId = param.split('_')[1];
       await sendAlbumToUser(env, chatId, albumId);
       return;
     }
     
     if (isAdmin) {
-      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/multitrack - Bulk upload\n/pending - Show pending requests\n/clear [number] [album_id] - Clear request\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics');
+      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/multitrack - Bulk upload\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel');
     } else {
-      await sendMessage(env, chatId, '🎵 Welcome! Request music in the group by typing:\n\nI want [Artist] - [Album Name]');
+      await sendMessage(env, chatId, '🎵 Welcome! Visit our website to get music:\nhttps://requests.zedtopvibes.com');
     }
     return;
-  }
-  
-  // Handle group messages - look for requests
-  if (isGroup && !isAdmin) {
-    // Check if message looks like a request
-    const requestPattern = /(?:i want|request|please send|can i get)\s+(.+?)\s*[-]\s*(.+)/i;
-    const match = text.match(requestPattern);
-    
-    if (match) {
-      const artist = match[1].trim();
-      const albumName = match[2].trim();
-      
-      await addRequestToQueue(env, chatId, userId, username, firstName, artist, albumName);
-      return;
-    }
   }
   
   if (!isAdmin) {
-    // Not admin, not a request in group - ignore
-    if (!isGroup) {
-      await sendMessage(env, chatId, 'You are not authorized. Use the group to request music.');
-    }
-    return;
-  }
-  
-  // Admin commands below here
-  
-  // /pending - Show pending requests
-  if (text === '/pending') {
-    await showPendingRequests(env, chatId);
-    return;
-  }
-  
-  // /clear [number] [album_id]
-  if (text.startsWith('/clear')) {
-    const parts = text.split(' ');
-    if (parts.length < 3) {
-      await sendMessage(env, chatId, 'Usage: /clear [request_number] [album_id]\n\nExample: /clear 42 1\n\nGet album IDs from /listalbums');
-      return;
-    }
-    
-    const requestNumber = parseInt(parts[1]);
-    const albumId = parts[2];
-    
-    if (isNaN(requestNumber)) {
-      await sendMessage(env, chatId, '❌ Request number must be a number.');
-      return;
-    }
-    
-    await clearRequest(env, chatId, requestNumber, albumId);
+    await sendMessage(env, chatId, 'You are not authorized.');
     return;
   }
   
@@ -295,7 +233,7 @@ async function handleUpdate(update, env) {
     return;
   }
   
-  // List albums
+  // List albums with new domain
   if (text === '/listalbums') {
     const db = env.DB;
     const albums = await db.prepare('SELECT id, name, artist_id FROM albums ORDER BY id').all();
@@ -309,9 +247,9 @@ async function handleUpdate(update, env) {
     for (const album of albums.results) {
       const artist = await db.prepare('SELECT name FROM artists WHERE id = ?').bind(album.artist_id).first();
       const artistName = artist ? artist.name : 'Unknown';
-      const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks WHERE album_id = ?').bind(album.id).first();
-      list += `ID: ${album.id} | ${artistName} - ${album.name} (${trackCount?.count || 0} tracks)\n`;
+      list += `ID: ${album.id} | ${artistName} - ${album.name}\n`;
     }
+    list += '\n🔗 Link: https://requests.zedtopvibes.com/album?id=ID';
     await sendMessage(env, chatId, list);
     return;
   }
@@ -322,9 +260,8 @@ async function handleUpdate(update, env) {
     const artistCount = await db.prepare('SELECT COUNT(*) as count FROM artists').first();
     const albumCount = await db.prepare('SELECT COUNT(*) as count FROM albums').first();
     const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks').first();
-    const pendingCount = await db.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").first();
     
-    await sendMessage(env, chatId, `📊 STATS\n\nArtists: ${artistCount?.count || 0}\nAlbums: ${albumCount?.count || 0}\nTracks: ${trackCount?.count || 0}\nPending requests: ${pendingCount?.count || 0}`);
+    await sendMessage(env, chatId, `📊 STATS\n\nArtists: ${artistCount?.count || 0}\nAlbums: ${albumCount?.count || 0}\nTracks: ${trackCount?.count || 0}`);
     return;
   }
   
@@ -535,111 +472,6 @@ async function handleUpdate(update, env) {
       return;
     }
   }
-}
-
-// Add request to queue
-async function addRequestToQueue(env, groupId, userId, username, firstName, artist, albumName) {
-  const db = env.DB;
-  
-  // Get current queue number
-  const pendingCount = await db.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").first();
-  const queueNumber = (pendingCount?.count || 0) + 1;
-  
-  // Insert request
-  await db.prepare(`
-    INSERT INTO requests (user_tg_id, user_name, artist, album_name, queue_number, status)
-    VALUES (?, ?, ?, ?, ?, 'pending')
-  `).bind(userId, username || firstName, artist, albumName, queueNumber).run();
-  
-  // Reply in group
-  const displayName = username ? `@${username}` : firstName;
-  await sendMessage(env, groupId, `✅ Request #${queueNumber} received from ${displayName}!\n\n📀 ${artist} - ${albumName}\n\n⏳ Queue position: ${queueNumber}\n\nAdmin will process your request soon.`);
-}
-
-// Show pending requests to admin
-async function showPendingRequests(env, chatId) {
-  const db = env.DB;
-  
-  const requests = await db.prepare(`
-    SELECT id, queue_number, user_name, user_tg_id, artist, album_name, created_at
-    FROM requests
-    WHERE status = 'pending'
-    ORDER BY queue_number
-  `).all();
-  
-  if (!requests.results || requests.results.length === 0) {
-    await sendMessage(env, chatId, '📋 No pending requests.');
-    return;
-  }
-  
-  let list = '📋 PENDING REQUESTS:\n\n';
-  for (const req of requests.results) {
-    list += `#${req.queue_number} | ${req.user_name || req.user_tg_id} | ${req.artist} - ${req.album_name}\n`;
-  }
-  list += '\n✅ To clear: /clear [number] [album_id]\n📎 Get album IDs from /listalbums';
-  
-  await sendMessage(env, chatId, list);
-}
-
-// Clear request and post album
-async function clearRequest(env, adminChatId, requestNumber, albumId) {
-  const db = env.DB;
-  
-  // Get the request
-  const request = await db.prepare(`
-    SELECT id, user_tg_id, user_name, artist, album_name
-    FROM requests
-    WHERE queue_number = ? AND status = 'pending'
-  `).bind(requestNumber).first();
-  
-  if (!request) {
-    await sendMessage(env, adminChatId, `❌ Request #${requestNumber} not found or already cleared.`);
-    return;
-  }
-  
-  // Get album info
-  const album = await db.prepare(`
-    SELECT albums.id, albums.name, artists.name as artist_name, 
-           COUNT(tracks.id) as track_count
-    FROM albums
-    JOIN artists ON albums.artist_id = artists.id
-    LEFT JOIN tracks ON tracks.album_id = albums.id
-    WHERE albums.id = ?
-    GROUP BY albums.id
-  `).bind(albumId).first();
-  
-  if (!album) {
-    await sendMessage(env, adminChatId, `❌ Album ID ${albumId} not found. Use /listalbums to see available albums.`);
-    return;
-  }
-  
-  // Mark request as cleared
-  await db.prepare(`UPDATE requests SET status = 'cleared' WHERE id = ?`).bind(request.id).run();
-  
-  // Create personalized link
-  const albumLink = `https://requests.zedtopvibes.com/album?id=${album.id}&user=${request.user_tg_id}`;
-  
-  // Post to group
-  const groupId = env.GROUP_CHAT_ID;
-  const displayName = request.user_name ? `@${request.user_name}` : `user`;
-  const caption = `💽 ALBUM: ${album.name}\n\n👤 Artist: ${album.artist_name}\n🎧 Total Tracks: ${album.track_count || 0}\n\n🎵 ${displayName}, click below to receive your track:`;
-  
-  const token = env.TELEGRAM_BOT_TOKEN;
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: groupId,
-      text: caption,
-      reply_markup: {
-        inline_keyboard: [[
-          { text: "📀 Get Files", url: albumLink }
-        ]]
-      }
-    })
-  });
-  
-  await sendMessage(env, adminChatId, `✅ Request #${requestNumber} cleared!\n\nPosted "${album.name}" for ${displayName} in the group.`);
 }
 
 // Send album to user
