@@ -1,4 +1,4 @@
-// Single file bot - Zambian Music Updates
+// Single file bot - Zambian Music Updates with Single User Links
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -15,8 +15,9 @@ export default {
     // Album page
     if (path === '/album') {
       const albumId = url.searchParams.get('id');
+      const allowedUser = url.searchParams.get('user');
       if (albumId) {
-        return await serveAlbumPage(env, albumId);
+        return await serveAlbumPage(env, albumId, allowedUser);
       }
       return new Response('Album ID required', { status: 400 });
     }
@@ -49,8 +50,8 @@ export default {
   }
 };
 
-// Serve single album page
-async function serveAlbumPage(env, albumId) {
+// Serve single album page with user check
+async function serveAlbumPage(env, albumId, allowedUserId) {
   const db = env.DB;
   
   const album = await db.prepare(`
@@ -70,6 +71,9 @@ async function serveAlbumPage(env, albumId) {
     WHERE album_id = ?
     ORDER BY id
   `).bind(albumId).all();
+  
+  // The link will be used in the button
+  const botLink = `https://t.me/zambianmusicupdatesbot?start=album_${album.id}_user_${allowedUserId || ''}`;
   
   const html = `<!DOCTYPE html>
 <html>
@@ -135,6 +139,12 @@ async function serveAlbumPage(env, albumId) {
       font-size: 1.1rem;
     }
     .telegram-btn:hover { background: #006699; }
+    .error-message {
+      text-align: center;
+      padding: 40px;
+      background: white;
+      border-radius: 20px;
+    }
   </style>
 </head>
 <body>
@@ -158,7 +168,7 @@ async function serveAlbumPage(env, albumId) {
         📢 Advertisement Space<br>
         <small>Your ad here</small>
       </div>
-      <a href="https://t.me/zambianmusicupdatesbot?start=album_${album.id}" class="telegram-btn">
+      <a href="${botLink}" class="telegram-btn">
         📀 Get all tracks on Telegram
       </a>
     </div>
@@ -182,23 +192,34 @@ async function handleUpdate(update, env) {
   const chatId = msg.chat.id;
   const text = msg.text || '';
   const userId = msg.from.id.toString();
+  const username = msg.from.username || '';
+  const firstName = msg.from.first_name || '';
   
   const adminIds = env.ADMIN_IDS ? env.ADMIN_IDS.split(',') : [];
   const isAdmin = adminIds.includes(userId);
   
-  // Handle /start with album
+  // Handle /start with album and user parameter
   if (text && text.startsWith('/start')) {
     const param = text.split(' ')[1];
     if (param && param.startsWith('album_')) {
-      const albumId = param.split('_')[1];
+      const parts = param.split('_');
+      const albumId = parts[1];
+      const allowedUserId = parts[3]; // format: album_1_user_123456789
+      
+      // Check if user is allowed
+      if (allowedUserId && userId !== allowedUserId) {
+        await sendMessage(env, chatId, '❌ This track is not for you.\n\nOnly the person who requested this album can access it.');
+        return;
+      }
+      
       await sendAlbumToUser(env, chatId, albumId);
       return;
     }
     
     if (isAdmin) {
-      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/multitrack - Bulk upload\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel');
+      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/multitrack - Bulk upload\n/post @username album_id - Post album for specific user\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel');
     } else {
-      await sendMessage(env, chatId, '🎵 Welcome! Visit our website to get music:\nhttps://requests.zedtopvibes.com');
+      await sendMessage(env, chatId, '🎵 Welcome! Request music in the group.');
     }
     return;
   }
@@ -212,6 +233,87 @@ async function handleUpdate(update, env) {
   if (text === '/cancel') {
     pending.delete(userId);
     await sendMessage(env, chatId, 'Cancelled.');
+    return;
+  }
+  
+  // /post command - Post album for specific user
+  if (text.startsWith('/post')) {
+    const parts = text.split(' ');
+    if (parts.length < 3) {
+      await sendMessage(env, chatId, 'Usage: /post @username album_id\n\nExample: /post @saviourchanda 1');
+      return;
+    }
+    
+    let targetUsername = parts[1];
+    // Remove @ if present
+    if (targetUsername.startsWith('@')) {
+      targetUsername = targetUsername.substring(1);
+    }
+    
+    const albumId = parts[2];
+    
+    // Get album info
+    const db = env.DB;
+    const album = await db.prepare(`
+      SELECT albums.id, albums.name, artists.name as artist_name, 
+             COUNT(tracks.id) as track_count
+      FROM albums
+      JOIN artists ON albums.artist_id = artists.id
+      LEFT JOIN tracks ON tracks.album_id = albums.id
+      WHERE albums.id = ?
+      GROUP BY albums.id
+    `).bind(albumId).first();
+    
+    if (!album) {
+      await sendMessage(env, chatId, `❌ Album ID ${albumId} not found.`);
+      return;
+    }
+    
+    // Get user ID from username
+    const token = env.TELEGRAM_BOT_TOKEN;
+    const userResponse = await fetch(`https://api.telegram.org/bot${token}/getChat?chat_id=@${targetUsername}`);
+    const userData = await userResponse.json();
+    
+    let targetUserId = null;
+    if (userData.ok && userData.result) {
+      targetUserId = userData.result.id;
+    } else {
+      // Try to get from group member
+      const groupId = env.GROUP_CHAT_ID;
+      const memberResponse = await fetch(`https://api.telegram.org/bot${token}/getChatMember?chat_id=${groupId}&user_id=@${targetUsername}`);
+      const memberData = await memberResponse.json();
+      if (memberData.ok && memberData.result) {
+        targetUserId = memberData.result.user.id;
+      }
+    }
+    
+    if (!targetUserId) {
+      await sendMessage(env, chatId, `❌ Could not find user @${targetUsername}. Make sure they have started the bot.`);
+      return;
+    }
+    
+    // Create the personalized link
+    const albumLink = `https://requests.zedtopvibes.com/album?id=${album.id}&user=${targetUserId}`;
+    
+    // Post to group
+    const groupId = env.GROUP_CHAT_ID;
+    const caption = `💽 ALBUM: ${album.name}\n\n👤 Artist: ${album.artist_name}\n🎧 Total Tracks: ${album.track_count || 0}\n\n🎵 @${targetUsername}, click below to receive your track:`;
+    
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: groupId,
+        text: caption,
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "📀 Get Files", url: albumLink }
+          ]]
+        }
+      })
+    });
+    
+    await sendMessage(env, chatId, `✅ Posted album "${album.name}" for @${targetUsername} in the group!`);
     return;
   }
   
@@ -233,7 +335,7 @@ async function handleUpdate(update, env) {
     return;
   }
   
-  // List albums with new domain
+  // List albums
   if (text === '/listalbums') {
     const db = env.DB;
     const albums = await db.prepare('SELECT id, name, artist_id FROM albums ORDER BY id').all();
@@ -247,9 +349,10 @@ async function handleUpdate(update, env) {
     for (const album of albums.results) {
       const artist = await db.prepare('SELECT name FROM artists WHERE id = ?').bind(album.artist_id).first();
       const artistName = artist ? artist.name : 'Unknown';
-      list += `ID: ${album.id} | ${artistName} - ${album.name}\n`;
+      const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks WHERE album_id = ?').bind(album.id).first();
+      list += `ID: ${album.id} | ${artistName} - ${album.name} (${trackCount?.count || 0} tracks)\n`;
     }
-    list += '\n🔗 Link: https://requests.zedtopvibes.com/album?id=ID';
+    list += '\n📎 Use: /post @username ID';
     await sendMessage(env, chatId, list);
     return;
   }
