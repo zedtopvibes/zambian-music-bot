@@ -49,53 +49,68 @@ async function handleUpdate(update, env) {
   // Show typing indicator
   await sendChatAction(env, chatId);
   
-  try {
-    // Try different AI model - Llama 2 is more stable
-    const aiResponse = await env.AI.run('@cf/meta/llama-2-7b-chat-int8', {
-      prompt: `You are a music assistant for Zambian Music Updates. 
-      
-User said: "${text}"
-
-If this is a music request (user wants an album or song), respond with:
-REQUEST: artist=ARTIST_NAME, album=ALBUM_NAME
-
-If not a music request, respond with a short friendly reply.
-
-Your response:`,
-      max_tokens: 150
-    });
+  // FIRST: Check if it's a music request using simple pattern
+  const lowerText = text.toLowerCase();
+  const isMusicRequest = (
+    lowerText.includes('i want') || 
+    lowerText.includes('request') || 
+    (lowerText.includes('album') && !lowerText.includes('who')) ||
+    text.includes('-')
+  );
+  
+  // SECOND: If it's a music request, extract artist and album
+  if (isMusicRequest && isGroup) {
+    let artist = null;
+    let album = null;
     
-    const reply = aiResponse.response || aiResponse;
-    
-    // Check if it's a request
-    if (reply.includes('REQUEST:')) {
-      // Extract artist and album
-      const artistMatch = reply.match(/artist=([^,]+)/);
-      const albumMatch = reply.match(/album=([^\n]+)/);
-      
-      const artist = artistMatch ? artistMatch[1].trim() : null;
-      const album = albumMatch ? albumMatch[1].trim() : null;
-      
-      if (artist && album && isGroup) {
-        await addRequestToQueue(env, chatId, messageId, userId, username, firstName, artist, album);
-        return;
-      } else if (artist && album && !isGroup) {
-        await replyToMessage(env, chatId, messageId, "Please make music requests in the group chat!");
-        return;
+    // Try to extract using patterns
+    if (text.includes('-')) {
+      const parts = text.split('-');
+      if (parts.length >= 2) {
+        artist = parts[0].trim();
+        album = parts[1].trim();
+        // Remove "i want" from artist if present
+        artist = artist.replace(/i want/i, '').replace(/request/i, '').trim();
+      }
+    } else {
+      // Look for "i want" pattern
+      const match = text.match(/i want\s+(.+)/i);
+      if (match) {
+        const rest = match[1].trim();
+        const words = rest.split(' ');
+        if (words.length >= 2) {
+          album = words.pop();
+          artist = words.join(' ');
+        } else {
+          artist = rest;
+          album = rest;
+        }
       }
     }
     
-    // Not a request, send AI reply
-    let cleanReply = reply.replace('REQUEST: artist=..., album=...', '').trim();
-    if (!cleanReply) {
-      cleanReply = "I'm your music assistant! To request a song, say: I want [Artist] - [Album]";
+    if (artist && album) {
+      await addRequestToQueue(env, chatId, messageId, userId, username, firstName, artist, album);
+      return;
     }
-    await replyToMessage(env, chatId, messageId, cleanReply);
+  }
+  
+  // THIRD: Use AI for chat (not for requests)
+  try {
+    const aiResponse = await env.AI.run('@cf/meta/llama-2-7b-chat-int8', {
+      prompt: `You are a friendly music assistant for Zambian Music Updates. Keep responses short (1-2 sentences).
+
+User asked: "${text}"
+
+Your friendly reply:`,
+      max_tokens: 100
+    });
+    
+    const reply = aiResponse.response || aiResponse;
+    await replyToMessage(env, chatId, messageId, reply);
     
   } catch (error) {
     console.error('AI error:', error);
-    // Fallback response
-    await replyToMessage(env, chatId, messageId, "🎵 I'm your music assistant! To request a song, type: I want [Artist] - [Album]");
+    await replyToMessage(env, chatId, messageId, "🎵 I'm your music assistant! To request a song, type: I want Artist - Album");
   }
 }
 
