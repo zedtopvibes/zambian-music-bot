@@ -372,7 +372,7 @@ async function handleUpdate(update, env) {
     
     // Normal /start
     if (isAdmin) {
-      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/addtrack - Add single track\n/multitrack - Bulk upload multiple tracks\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel operation');
+      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/addtrack - Add single track\n/multitrack - Bulk upload multiple tracks\n/listartists - Show artists\n/listalbums - Show albums (with IDs)\n/stats - Statistics\n/cancel - Cancel operation');
     } else {
       await sendMessage(env, chatId, '🎵 Welcome to Zambian Music Updates!\n\nClick the button on our website to get music.');
     }
@@ -497,7 +497,7 @@ async function handleUpdate(update, env) {
     return;
   }
   
-  // Handle /listalbums
+  // Handle /listalbums - FIXED to show IDs
   if (text === '/listalbums') {
     const db = env.DB;
     const albums = await db.prepare(`
@@ -515,8 +515,9 @@ async function handleUpdate(update, env) {
     let list = '💿 ALBUMS:\n\n';
     for (const album of albums.results) {
       const trackCount = await db.prepare('SELECT COUNT(*) as count FROM tracks WHERE album_id = ?').bind(album.id).first();
-      list += `• ${album.artist_name} - ${album.name} (${trackCount?.count || 0} tracks)\n`;
+      list += `ID: ${album.id} | ${album.artist_name} - ${album.name} (${trackCount?.count || 0} tracks)\n`;
     }
+    list += '\n📎 Use link: https://music.zedtopvibes.com/album?id=ID';
     await sendMessage(env, chatId, list);
     return;
   }
