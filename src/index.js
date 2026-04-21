@@ -44,13 +44,14 @@ async function handleUpdate(update, env) {
   const userId = msg.from.id.toString();
   const username = msg.from.username || '';
   const firstName = msg.from.first_name || '';
+  const messageId = msg.message_id;
   
   // Check if this is a group message
   const isGroup = chatId.toString().startsWith('-');
   
-  // For testing - reply to EVERY group message
+  // For testing - REPLY to every group message (threaded)
   if (isGroup) {
-    await sendMessage(env, chatId, `🔵 I saw your message: "${text}"`);
+    await replyToMessage(env, chatId, messageId, `🔵 I saw your message: "${text}"`);
     return;
   }
   
@@ -59,6 +60,20 @@ async function handleUpdate(update, env) {
     await sendMessage(env, chatId, '🎵 Bot is working! Send messages in the group.');
     return;
   }
+}
+
+// Send a threaded reply (reply to specific message)
+async function replyToMessage(env, chatId, replyToMessageId, text) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      reply_to_message_id: replyToMessageId
+    })
+  });
 }
 
 async function sendMessage(env, chatId, text) {
