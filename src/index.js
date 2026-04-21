@@ -1,21 +1,57 @@
-// Single file bot - Zambian Music Updates with Metadata Extraction & Bulk Upload
+// Single file bot - Zambian Music Updates with Website Album Page
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     
-    if (path === '/') {
-      return new Response('✅ Zambian Music Bot is running!', {
-        headers: { 'Content-Type': 'text/plain' }
+    // ========== WEBSITE PAGES ==========
+    
+    // Homepage - redirect to bot (no album list)
+    if (path === '/' || path === '/index.html') {
+      return await serveHomepage(env);
+    }
+    
+    // Album page - show single album (only when id is provided)
+    if (path === '/album') {
+      const albumId = url.searchParams.get('id');
+      if (albumId) {
+        return await serveAlbumPage(env, albumId);
+      }
+      // No id provided, redirect to bot
+      return new Response(null, {
+        status: 302,
+        headers: { 'Location': 'https://t.me/zambianmusicupdatesbot' }
       });
     }
     
+    // API endpoint - get album data as JSON
+    if (path === '/api/album') {
+      const albumId = url.searchParams.get('id');
+      if (albumId) {
+        return await getAlbumJSON(env, albumId);
+      }
+      return new Response('Album ID required', { status: 400 });
+    }
+    
+    // API endpoint - get album cover image
+    if (path === '/api/cover') {
+      const albumId = url.searchParams.get('id');
+      if (albumId) {
+        return await getAlbumCover(env, albumId);
+      }
+      return new Response('Album ID required', { status: 400 });
+    }
+    
+    // ========== TELEGRAM BOT ==========
+    
+    // Telegram webhook
     if (path === '/webhook' && request.method === 'POST') {
       const update = await request.json();
       await handleUpdate(update, env);
       return new Response('OK');
     }
     
+    // Setup webhook
     if (path === '/setup') {
       const webhookUrl = `https://${url.hostname}/webhook`;
       const token = env.TELEGRAM_BOT_TOKEN;
@@ -36,6 +72,278 @@ export default {
   }
 };
 
+// ========== WEBSITE FUNCTIONS ==========
+
+// Serve homepage - redirect to bot
+async function serveHomepage(env) {
+  // Redirect directly to bot
+  return new Response(null, {
+    status: 302,
+    headers: { 'Location': 'https://t.me/zambianmusicupdatesbot' }
+  });
+}
+
+// Serve single album page
+async function serveAlbumPage(env, albumId) {
+  const db = env.DB;
+  
+  const album = await db.prepare(`
+    SELECT albums.id, albums.name, artists.name as artist_name,
+           albums.release_year, albums.cover_file_id
+    FROM albums
+    JOIN artists ON albums.artist_id = artists.id
+    WHERE albums.id = ?
+  `).bind(albumId).first();
+  
+  if (!album) {
+    return new Response('Album not found', { status: 404 });
+  }
+  
+  const tracks = await db.prepare(`
+    SELECT id, track_number, title, duration
+    FROM tracks
+    WHERE album_id = ?
+    ORDER BY track_number, id
+  `).bind(albumId).all();
+  
+  // Ad placeholder - replace with your Adsterra code
+  const adCode = `
+    <div class="ad-container">
+      <!-- Replace with your Adsterra banner code -->
+      <div style="background: #f0f0f0; padding: 20px; text-align: center; border-radius: 8px;">
+        📢 Advertisement Space<br>
+        <small>Your ad here</small>
+      </div>
+    </div>
+  `;
+  
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(album.name)} - ${escapeHtml(album.artist_name)}</title>
+  <meta name="telegram:bot" content="@zambianmusicupdatesbot">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    .album-card {
+      background: white;
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+    
+    .album-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 30px;
+      text-align: center;
+      color: white;
+    }
+    
+    .album-icon {
+      font-size: 4rem;
+      margin-bottom: 15px;
+    }
+    
+    .album-name {
+      font-size: 1.8rem;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    
+    .artist-name {
+      font-size: 1.2rem;
+      opacity: 0.9;
+      margin-bottom: 10px;
+    }
+    
+    .release-year {
+      font-size: 0.9rem;
+      opacity: 0.8;
+    }
+    
+    .tracklist {
+      padding: 20px;
+    }
+    
+    .tracklist h3 {
+      margin-bottom: 15px;
+      color: #333;
+    }
+    
+    .track-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .track-number {
+      width: 40px;
+      color: #999;
+      font-weight: bold;
+    }
+    
+    .track-title {
+      flex: 1;
+      color: #333;
+    }
+    
+    .track-duration {
+      color: #999;
+      font-size: 0.85rem;
+    }
+    
+    .ad-container {
+      margin: 20px;
+    }
+    
+    .telegram-btn {
+      display: block;
+      background: #0088cc;
+      color: white;
+      text-align: center;
+      text-decoration: none;
+      padding: 15px;
+      margin: 20px;
+      border-radius: 12px;
+      font-weight: bold;
+      font-size: 1.1rem;
+      transition: background 0.2s;
+    }
+    
+    .telegram-btn:hover {
+      background: #006699;
+    }
+    
+    footer {
+      text-align: center;
+      color: white;
+      margin-top: 20px;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="album-card">
+      <div class="album-header">
+        <div class="album-icon">💿</div>
+        <div class="album-name">${escapeHtml(album.name)}</div>
+        <div class="artist-name">${escapeHtml(album.artist_name)}</div>
+        ${album.release_year ? `<div class="release-year">📅 ${album.release_year}</div>` : ''}
+      </div>
+      
+      <div class="tracklist">
+        <h3>🎧 Tracklist (${tracks.results.length} tracks)</h3>
+        ${tracks.results.map((track, index) => `
+          <div class="track-item">
+            <div class="track-number">${track.track_number || (index + 1)}</div>
+            <div class="track-title">${escapeHtml(track.title)}</div>
+            <div class="track-duration">${formatDuration(track.duration)}</div>
+          </div>
+        `).join('')}
+      </div>
+      
+      ${adCode}
+      
+      <a href="https://t.me/zambianmusicupdatesbot?start=album_${album.id}" class="telegram-btn">
+        📀 Get all tracks on Telegram
+      </a>
+    </div>
+    
+    <footer>
+      <p>Click the button above to receive all tracks via Telegram</p>
+    </footer>
+  </div>
+</body>
+</html>`;
+  
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html' }
+  });
+}
+
+// API: Get album as JSON
+async function getAlbumJSON(env, albumId) {
+  const db = env.DB;
+  
+  const album = await db.prepare(`
+    SELECT albums.id, albums.name, artists.name as artist_name,
+           albums.release_year, albums.cover_file_id
+    FROM albums
+    JOIN artists ON albums.artist_id = artists.id
+    WHERE albums.id = ?
+  `).bind(albumId).first();
+  
+  if (!album) {
+    return new Response(JSON.stringify({ error: 'Album not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  
+  const tracks = await db.prepare(`
+    SELECT id, track_number, title, duration
+    FROM tracks
+    WHERE album_id = ?
+    ORDER BY track_number, id
+  `).bind(albumId).all();
+  
+  return new Response(JSON.stringify({
+    ...album,
+    tracks: tracks.results
+  }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+// API: Get album cover image
+async function getAlbumCover(env, albumId) {
+  const db = env.DB;
+  
+  const album = await db.prepare('SELECT cover_file_id FROM albums WHERE id = ?').bind(albumId).first();
+  
+  if (!album || !album.cover_file_id) {
+    return new Response('Cover not found', { status: 404 });
+  }
+  
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const fileUrl = `https://api.telegram.org/bot${token}/getFile?file_id=${album.cover_file_id}`;
+  
+  const fileInfo = await fetch(fileUrl);
+  const fileData = await fileInfo.json();
+  
+  if (fileData.ok) {
+    const imageUrl = `https://api.telegram.org/file/bot${token}/${fileData.result.file_path}`;
+    const image = await fetch(imageUrl);
+    return new Response(image.body, {
+      headers: { 'Content-Type': 'image/jpeg' }
+    });
+  }
+  
+  return new Response('Cover not found', { status: 404 });
+}
+
+// ========== TELEGRAM BOT FUNCTIONS ==========
+
 // Store pending actions
 const pending = new Map();
 
@@ -51,31 +359,42 @@ async function handleUpdate(update, env) {
   const adminIds = env.ADMIN_IDS ? env.ADMIN_IDS.split(',') : [];
   const isAdmin = adminIds.includes(userId);
   
+  // Handle /start with album parameter (for user delivery)
+  if (text && text.startsWith('/start')) {
+    const param = text.split(' ')[1];
+    
+    if (param && param.startsWith('album_')) {
+      // User wants to receive an album
+      const albumId = param.split('_')[1];
+      await sendAlbumToUser(env, chatId, albumId);
+      return;
+    }
+    
+    // Normal /start
+    if (isAdmin) {
+      await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/addtrack - Add single track\n/multitrack - Bulk upload multiple tracks\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel operation');
+    } else {
+      await sendMessage(env, chatId, '🎵 Welcome to Zambian Music Updates!\n\nClick the button on our website to get music.');
+    }
+    return;
+  }
+  
   if (!isAdmin) {
     await sendMessage(env, chatId, 'You are not authorized to use this bot.');
     return;
   }
   
-  // Handle /start
-  if (text === '/start') {
-    await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/addtrack - Add single track\n/multitrack - Bulk upload multiple tracks\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel operation');
-    return;
-  }
-  
-  // Handle /cancel and /done FIRST (before any other command checks)
+  // Handle /cancel and /done FIRST
   if (text === '/cancel') {
     pending.delete(userId);
     await sendMessage(env, chatId, 'Operation cancelled.');
     return;
   }
   
-  // Handle /done - important for bulk upload
   if (text === '/done') {
-    // Check if user has a pending bulk upload
     const action = pending.get(userId);
     if (action && action.step === 'multitrack_upload') {
-      // Let the pending handler process it
-      // Do nothing here, let it go to pending handler
+      // Let pending handler process
     } else {
       await sendMessage(env, chatId, 'No active bulk upload. Use /multitrack to start.');
       return;
@@ -135,7 +454,7 @@ async function handleUpdate(update, env) {
     return;
   }
   
-  // Handle /multitrack - Bulk upload multiple files
+  // Handle /multitrack
   if (text === '/multitrack') {
     const db = env.DB;
     const artists = await db.prepare('SELECT id, name FROM artists ORDER BY name').all();
@@ -218,7 +537,6 @@ async function handleUpdate(update, env) {
   if (pending.has(userId)) {
     const action = pending.get(userId);
     
-    // ========== ADD ARTIST ==========
     if (action.step === 'artist_name') {
       const artistName = text.trim();
       const db = env.DB;
@@ -234,7 +552,6 @@ async function handleUpdate(update, env) {
       return;
     }
     
-    // ========== ADD ALBUM ==========
     if (action.step === 'album_artist') {
       const choice = parseInt(text);
       const artists = action.artists;
@@ -271,7 +588,6 @@ async function handleUpdate(update, env) {
       return;
     }
     
-    // ========== ADD TRACK (SINGLE) ==========
     if (action.step === 'track_artist') {
       const choice = parseInt(text);
       const artists = action.artists;
@@ -371,7 +687,6 @@ async function handleUpdate(update, env) {
       return;
     }
     
-    // ========== MULTI TRACK BULK UPLOAD ==========
     if (action.step === 'multitrack_artist') {
       const choice = parseInt(text);
       const artists = action.artists;
@@ -447,7 +762,7 @@ async function handleUpdate(update, env) {
         tracks: []
       });
       
-      await sendMessage(env, chatId, `📀 Album: ${albumName}\n\nNow send me ALL audio files for this album.\nYou can send multiple files one after another.\n\nSend /done when finished.\nSend /cancel to stop.`);
+      await sendMessage(env, chatId, `📀 Album: ${albumName}\n\nNow send me ALL audio files for this album.\n\nSend /done when finished.\nSend /cancel to stop.`);
       return;
     }
     
@@ -512,7 +827,56 @@ async function handleUpdate(update, env) {
   }
 }
 
-// Process single audio file with metadata extraction
+// Send album to user (for non-admin users)
+async function sendAlbumToUser(env, chatId, albumId) {
+  const db = env.DB;
+  
+  const album = await db.prepare(`
+    SELECT albums.id, albums.name, artists.name as artist_name
+    FROM albums
+    JOIN artists ON albums.artist_id = artists.id
+    WHERE albums.id = ?
+  `).bind(albumId).first();
+  
+  if (!album) {
+    await sendMessage(env, chatId, '❌ Album not found.');
+    return;
+  }
+  
+  const tracks = await db.prepare(`
+    SELECT title, file_id, duration
+    FROM tracks
+    WHERE album_id = ?
+    ORDER BY track_number, id
+  `).bind(albumId).all();
+  
+  if (!tracks.results || tracks.results.length === 0) {
+    await sendMessage(env, chatId, '❌ No tracks found for this album.');
+    return;
+  }
+  
+  await sendMessage(env, chatId, `🎵 ${album.name} - ${album.artist_name}\n\n📀 Found ${tracks.results.length} tracks. Sending now...`);
+  
+  for (const track of tracks.results) {
+    try {
+      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendAudio`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          audio: track.file_id,
+          caption: `${track.title}\n${album.artist_name}`
+        })
+      });
+    } catch (error) {
+      console.error('Send track error:', error);
+    }
+  }
+  
+  await sendMessage(env, chatId, `✅ All tracks sent! Enjoy the music! 🎧`);
+}
+
+// Process single audio file
 async function processAudioFile(msg, env, chatId, userId, action) {
   if (!msg.audio) {
     await sendMessage(env, chatId, 'Please send an AUDIO file (MP3).');
@@ -523,32 +887,16 @@ async function processAudioFile(msg, env, chatId, userId, action) {
   const fileId = audio.file_id;
   const duration = audio.duration;
   
-  let extractedArtist = audio.performer || null;
   let extractedTitle = audio.title || null;
   let fileName = audio.file_name || '';
   
   if (!extractedTitle && fileName) {
-    const extracted = extractFromFilename(fileName);
-    if (extracted) {
-      if (!extractedArtist) extractedArtist = extracted.artist;
-      if (!extractedTitle) extractedTitle = extracted.title;
-    }
-    
-    if (!extractedTitle) {
-      extractedTitle = fileName.replace(/\.mp3$/i, '');
-    }
+    extractedTitle = fileName.replace(/\.mp3$/i, '');
   }
   
   let trackTitle = action.trackTitle || extractedTitle || 'Unknown Title';
   
-  let metadataMsg = '';
-  if (extractedArtist && extractedTitle) {
-    metadataMsg = `\n\n📀 Detected: ${extractedArtist} - ${extractedTitle}`;
-  } else if (extractedTitle) {
-    metadataMsg = `\n\n📀 Detected title: ${extractedTitle}`;
-  }
-  
-  await sendMessage(env, chatId, `Processing audio...${metadataMsg}\n\nArtist: ${action.artistName}\nTitle: ${trackTitle}\n\nSaving...`);
+  await sendMessage(env, chatId, `Processing: ${trackTitle}\n\nArtist: ${action.artistName}\n\nSaving...`);
   
   const channelId = env.PRIVATE_CHANNEL_ID;
   const token = env.TELEGRAM_BOT_TOKEN;
@@ -586,40 +934,22 @@ async function processAudioFile(msg, env, chatId, userId, action) {
   pending.delete(userId);
 }
 
-// Process bulk audio files
+// Process bulk audio
 async function processBulkAudio(msg, env, chatId, userId, action) {
   const audio = msg.audio;
   const fileId = audio.file_id;
   const duration = audio.duration;
   
-  let extractedArtist = audio.performer || null;
   let extractedTitle = audio.title || null;
   let fileName = audio.file_name || '';
   
   if (!extractedTitle && fileName) {
-    const extracted = extractFromFilename(fileName);
-    if (extracted) {
-      if (!extractedArtist) extractedArtist = extracted.artist;
-      if (!extractedTitle) extractedTitle = extracted.title;
-    }
-    
-    if (!extractedTitle) {
-      extractedTitle = fileName.replace(/\.mp3$/i, '');
-    }
+    extractedTitle = fileName.replace(/\.mp3$/i, '');
   }
   
   let trackTitle = extractedTitle || 'Unknown Title';
   
-  let detectionMsg = '';
-  if (extractedArtist && extractedTitle) {
-    detectionMsg = `📀 ${extractedArtist} - ${extractedTitle}`;
-  } else if (extractedTitle) {
-    detectionMsg = `📀 ${extractedTitle}`;
-  } else {
-    detectionMsg = `📀 ${fileName}`;
-  }
-  
-  await sendMessage(env, chatId, `Processing: ${detectionMsg}`);
+  await sendMessage(env, chatId, `Processing: ${trackTitle}`);
   
   const channelId = env.PRIVATE_CHANNEL_ID;
   const token = env.TELEGRAM_BOT_TOKEN;
@@ -651,32 +981,29 @@ async function processBulkAudio(msg, env, chatId, userId, action) {
       
       await sendMessage(env, chatId, `✅ ${trackTitle} saved! (${action.tracks.length} total)`);
     } else {
-      await sendMessage(env, chatId, `❌ Failed: ${trackTitle} - ${forwardResult.description || 'Unknown error'}`);
+      await sendMessage(env, chatId, `❌ Failed: ${trackTitle}`);
     }
   } catch (error) {
     await sendMessage(env, chatId, `❌ Error: ${error.message}`);
   }
 }
 
-// Extract metadata from filename
-function extractFromFilename(filename) {
-  const match = filename.match(/^(.+?)\s*-\s*(.+?)\.mp3$/i);
-  if (match) {
-    return {
-      artist: match[1].trim(),
-      title: match[2].trim()
-    };
-  }
-  
-  const match2 = filename.match(/^\d+\s*-\s*(.+?)\.mp3$/i);
-  if (match2) {
-    return {
-      artist: null,
-      title: match2[1].trim()
-    };
-  }
-  
-  return null;
+// Helper functions
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/[&<>]/g, function(m) {
+    if (m === '&') return '&amp;';
+    if (m === '<') return '&lt;';
+    if (m === '>') return '&gt;';
+    return m;
+  });
+}
+
+function formatDuration(seconds) {
+  if (!seconds) return '';
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 async function sendMessage(env, chatId, text) {
