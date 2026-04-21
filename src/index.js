@@ -1,4 +1,4 @@
-Let's just get back to this one 
+
 // Single file bot - Zambian Music Updates
 export default {
   async fetch(request, env, ctx) {
