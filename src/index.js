@@ -203,27 +203,94 @@ async function handleUpdate(update, env) {
     if (isAdmin) {
       await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/multitrack - Bulk upload\n/pending - Show pending requests\n/clear [number] [album_id] - Clear request\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel');
     } else {
-      await sendMessage(env, chatId, '🎵 Welcome! Request music in the group by typing:\n\nI want [Artist] - [Album Name]');
+      await sendMessage(env, chatId, '🎵 Welcome! Request music in the group by typing:\n\nI want Artist - Album\n\nExample: I want Yo Maps - Komando');
     }
     return;
   }
   
   // Handle group messages - look for requests from non-admins
   if (isGroup && !isAdmin && text) {
-    // Patterns for requests
-    const patterns = [
-      /(?:i want|request|please send|can i get)\s+(.+?)\s*[-]\s*(.+)/i,
-      /^(.+?)\s*[-]\s*(.+)$/i
-    ];
+    let artist = null;
+    let albumName = null;
     
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
+    // Pattern 1: I want Artist - Album
+    let match = text.match(/i want\s+(.+?)\s*[-]\s*(.+)/i);
+    if (match) {
+      artist = match[1].trim();
+      albumName = match[2].trim();
+    }
+    
+    // Pattern 2: I want Artist Album (no dash)
+    if (!artist) {
+      match = text.match(/i want\s+(.+)/i);
       if (match) {
-        const artist = match[1].trim();
-        const albumName = match[2].trim();
-        await addRequestToQueue(env, chatId, userId, username, firstName, artist, albumName);
-        return;
+        const rest = match[1].trim();
+        const words = rest.split(' ');
+        if (words.length >= 2) {
+          albumName = words.pop();
+          artist = words.join(' ');
+        } else {
+          artist = rest;
+          albumName = rest;
+        }
       }
+    }
+    
+    // Pattern 3: request Artist - Album
+    if (!artist) {
+      match = text.match(/request\s+(.+?)\s*[-]\s*(.+)/i);
+      if (match) {
+        artist = match[1].trim();
+        albumName = match[2].trim();
+      }
+    }
+    
+    // Pattern 4: request Artist Album (no dash)
+    if (!artist) {
+      match = text.match(/request\s+(.+)/i);
+      if (match) {
+        const rest = match[1].trim();
+        const words = rest.split(' ');
+        if (words.length >= 2) {
+          albumName = words.pop();
+          artist = words.join(' ');
+        } else {
+          artist = rest;
+          albumName = rest;
+        }
+      }
+    }
+    
+    // Pattern 5: Artist - Album (no keyword)
+    if (!artist) {
+      match = text.match(/^(.+?)\s*[-]\s*(.+)$/i);
+      if (match) {
+        artist = match[1].trim();
+        albumName = match[2].trim();
+      }
+    }
+    
+    // Pattern 6: please send Artist - Album
+    if (!artist) {
+      match = text.match(/please send\s+(.+?)\s*[-]\s*(.+)/i);
+      if (match) {
+        artist = match[1].trim();
+        albumName = match[2].trim();
+      }
+    }
+    
+    // Pattern 7: can I get Artist - Album
+    if (!artist) {
+      match = text.match(/can i get\s+(.+?)\s*[-]\s*(.+)/i);
+      if (match) {
+        artist = match[1].trim();
+        albumName = match[2].trim();
+      }
+    }
+    
+    if (artist && albumName) {
+      await addRequestToQueue(env, chatId, userId, username, firstName, artist, albumName);
+      return;
     }
   }
   
