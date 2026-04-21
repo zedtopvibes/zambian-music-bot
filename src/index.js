@@ -198,7 +198,7 @@ async function handleUpdate(update, env) {
     if (isAdmin) {
       await sendMessage(env, chatId, '🎵 Admin Menu\n\n/addartist - Add artist\n/addalbum - Add album\n/multitrack - Bulk upload\n/listartists - Show artists\n/listalbums - Show albums\n/stats - Statistics\n/cancel - Cancel');
     } else {
-      await sendMessage(env, chatId, '🎵 Welcome! Visit our website to get music.');
+      await sendMessage(env, chatId, '🎵 Welcome! Visit our website to get music:\nhttps://requests.zedtopvibes.com');
     }
     return;
   }
@@ -233,7 +233,7 @@ async function handleUpdate(update, env) {
     return;
   }
   
-  // List albums (SIMPLIFIED - NO COMPLEX QUERIES)
+  // List albums with new domain
   if (text === '/listalbums') {
     const db = env.DB;
     const albums = await db.prepare('SELECT id, name, artist_id FROM albums ORDER BY id').all();
@@ -245,12 +245,11 @@ async function handleUpdate(update, env) {
     
     let list = '💿 ALBUMS:\n\n';
     for (const album of albums.results) {
-      // Get artist name separately
       const artist = await db.prepare('SELECT name FROM artists WHERE id = ?').bind(album.artist_id).first();
       const artistName = artist ? artist.name : 'Unknown';
       list += `ID: ${album.id} | ${artistName} - ${album.name}\n`;
     }
-    list += '\n🔗 Link: https://music.zedtopvibes.com/album?id=ID';
+    list += '\n🔗 Link: https://requests.zedtopvibes.com/album?id=ID';
     await sendMessage(env, chatId, list);
     return;
   }
