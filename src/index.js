@@ -49,74 +49,69 @@ async function handleUpdate(update, env) {
   // Show typing indicator
   await sendChatAction(env, chatId);
   
-  // FIRST: Check if it's a music request using simple pattern
-  const lowerText = text.toLowerCase();
-  const isMusicRequest = (
-    lowerText.includes('i want') || 
-    lowerText.includes('request') || 
-    (lowerText.includes('album') && !lowerText.includes('who')) ||
-    text.includes('-')
-  );
+  // Check for music request using patterns
+  let artist = null;
+  let album = null;
   
-  // SECOND: If it's a music request, extract artist and album
-  if (isMusicRequest && isGroup) {
-    let artist = null;
-    let album = null;
-    
-    // Try to extract using patterns
-    if (text.includes('-')) {
-      const parts = text.split('-');
-      if (parts.length >= 2) {
-        artist = parts[0].trim();
-        album = parts[1].trim();
-        artist = artist.replace(/i want/i, '').replace(/request/i, '').trim();
-      }
-    } else {
-      const match = text.match(/i want\s+(.+)/i);
-      if (match) {
-        const rest = match[1].trim();
-        const words = rest.split(' ');
-        if (words.length >= 2) {
-          album = words.pop();
-          artist = words.join(' ');
-        } else {
-          artist = rest;
-          album = rest;
-        }
-      }
-    }
-    
-    if (artist && album) {
-      await addRequestToQueue(env, chatId, messageId, userId, username, firstName, artist, album);
-      return;
+  // Pattern 1: Artist - Album
+  if (text.includes('-')) {
+    const parts = text.split('-');
+    if (parts.length >= 2) {
+      artist = parts[0].trim();
+      album = parts[1].trim();
+      artist = artist.replace(/i want/i, '').replace(/request/i, '').trim();
     }
   }
   
-  // THIRD: Use AI for chat (not for requests)
-  try {
-    const aiResponse = await env.AI.run('@cf/meta/llama-2-7b-chat-int8', {
-      prompt: 'You are a friendly music assistant for Zambian Music Updates. Keep responses short (1-2 sentences).\n\nUser asked: "' + text + '"\n\nYour friendly reply:',
-      max_tokens: 100
-    });
-    
-    const reply = aiResponse.response || aiResponse;
-    await replyToMessage(env, chatId, messageId, reply);
-    
-  } catch (error) {
-    console.error('AI error:', error);
-    await replyToMessage(env, chatId, messageId, '🎵 I\'m your music assistant! To request a song, type: I want Artist - Album');
+  // Pattern 2: I want Artist Album
+  if (!artist) {
+    const match = text.match(/i want\s+(.+)/i);
+    if (match) {
+      const rest = match[1].trim();
+      const words = rest.split(' ');
+      if (words.length >= 2) {
+        album = words.pop();
+        artist = words.join(' ');
+      }
+    }
+  }
+  
+  // If it's a valid request
+  if (artist && album && isGroup) {
+    await addRequestToQueue(env, chatId, messageId, userId, username, firstName, artist, album);
+    return;
+  }
+  
+  // For questions, give a simple response (no AI to avoid wrong answers)
+  const lowerText = text.toLowerCase();
+  
+  if (lowerText.includes('who is') || lowerText.includes('what is') || lowerText.includes('tell me about')) {
+    await replyToMessage(env, chatId, messageId, "🎵 I don't have artist info. To request music, type: I want Artist - Album");
+    return;
+  }
+  
+  if (lowerText.includes('hello') || lowerText.includes('hi')) {
+    await replyToMessage(env, chatId, messageId, "Hello! To request music, type: I want Artist - Album");
+    return;
+  }
+  
+  if (lowerText.includes('thank')) {
+    await replyToMessage(env, chatId, messageId, "You're welcome! 🎵");
+    return;
+  }
+  
+  // Default response
+  if (isGroup) {
+    await replyToMessage(env, chatId, messageId, "🎵 To request music, type: I want Artist - Album\n\nExample: I want Yo Maps - Komando");
   }
 }
 
 async function addRequestToQueue(env, groupId, replyToMsgId, userId, username, firstName, artist, albumName) {
   const db = env.DB;
   
-  // Create table if needed (single line SQL)
   try {
     await db.prepare('CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, user_tg_id TEXT NOT NULL, user_name TEXT, artist TEXT, album_name TEXT, queue_number INTEGER, status TEXT DEFAULT "pending", created_at DATETIME DEFAULT CURRENT_TIMESTAMP)').run();
-  } catch (e) {
-    // Table might already exist
-  }
+  } catch (e) {}
   
   const pendingCount = await db.prepare('SELECT COUNT(*) as count FROM requests WHERE status = "pending"').first();
   const queueNumber = (pendingCount?.count || 0) + 1;
@@ -125,7 +120,7 @@ async function addRequestToQueue(env, groupId, replyToMsgId, userId, username, f
     .bind(userId, username || firstName, artist, albumName, queueNumber).run();
   
   const displayName = username ? '@' + username : firstName;
-  await replyToMessage(env, groupId, replyToMsgId, '✅ Request #' + queueNumber + ' received from ' + displayName + '!\n\n🎤 Artist: ' + artist + '\n💿 Album: ' + albumName + '\n\n⏳ Queue position: ' + queueNumber + '\n\nAdmin will process your request soon.');
+  await replyToMessage(env, groupId, replyToMsgId, '✅ Request #' + queueNumber + ' received from ' + displayName + '!\n\n🎤 Artist: ' + artist + '\n💿 Album: ' + albumName + '\n\n⏳ Queue position: ' + queueNumber);
 }
 
 async function sendChatAction(env, chatId) {
