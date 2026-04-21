@@ -10,7 +10,7 @@ export default {
         status: 302,
         headers: { 'Location': 'https://t.me/zambianmusicupdatesbot' }
       });
-    }
+    } 
     
     // Album page
     if (path === '/album') {
