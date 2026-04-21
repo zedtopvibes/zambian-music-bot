@@ -49,53 +49,53 @@ async function handleUpdate(update, env) {
   // Show typing indicator
   await sendChatAction(env, chatId);
   
-  // Use AI to understand the message
   try {
-    const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-      messages: [
-        {
-          role: 'system',
-          content: `You analyze music requests. Determine:
-1. Is this a music request? (wants to get an album/song)
-2. If yes, extract artist name and album name
-3. If no, respond as a friendly music assistant
+    // Try different AI model - Llama 2 is more stable
+    const aiResponse = await env.AI.run('@cf/meta/llama-2-7b-chat-int8', {
+      prompt: `You are a music assistant for Zambian Music Updates. 
+      
+User said: "${text}"
 
-Respond with JSON only:
-{"is_request": true/false, "artist": "artist name", "album": "album name", "reply": "your response"}
+If this is a music request (user wants an album or song), respond with:
+REQUEST: artist=ARTIST_NAME, album=ALBUM_NAME
 
-If not a request, put your friendly reply in "reply".
-If it is a request, put "reply" as "Request received!"`
-        },
-        {
-          role: 'user',
-          content: text
-        }
-      ]
+If not a music request, respond with a short friendly reply.
+
+Your response:`,
+      max_tokens: 150
     });
     
-    // Parse AI response
-    let parsed;
-    try {
-      parsed = JSON.parse(aiResponse.response);
-    } catch (e) {
-      parsed = { is_request: false, reply: "I'm here to help with music requests! Try: I want Artist - Album" };
+    const reply = aiResponse.response || aiResponse;
+    
+    // Check if it's a request
+    if (reply.includes('REQUEST:')) {
+      // Extract artist and album
+      const artistMatch = reply.match(/artist=([^,]+)/);
+      const albumMatch = reply.match(/album=([^\n]+)/);
+      
+      const artist = artistMatch ? artistMatch[1].trim() : null;
+      const album = albumMatch ? albumMatch[1].trim() : null;
+      
+      if (artist && album && isGroup) {
+        await addRequestToQueue(env, chatId, messageId, userId, username, firstName, artist, album);
+        return;
+      } else if (artist && album && !isGroup) {
+        await replyToMessage(env, chatId, messageId, "Please make music requests in the group chat!");
+        return;
+      }
     }
     
-    // Handle music requests
-    if (parsed.is_request && parsed.artist && parsed.album && parsed.artist !== "unknown" && parsed.album !== "unknown") {
-      // Only process requests in group chat
-      if (isGroup) {
-        await addRequestToQueue(env, chatId, messageId, userId, username, firstName, parsed.artist, parsed.album);
-      } else {
-        await replyToMessage(env, chatId, messageId, "Please make music requests in the group chat!");
-      }
-    } else {
-      // Normal chat response
-      await replyToMessage(env, chatId, messageId, parsed.reply || "I'm your music assistant! Request songs by saying: I want Artist - Album");
+    // Not a request, send AI reply
+    let cleanReply = reply.replace('REQUEST: artist=..., album=...', '').trim();
+    if (!cleanReply) {
+      cleanReply = "I'm your music assistant! To request a song, say: I want [Artist] - [Album]";
     }
+    await replyToMessage(env, chatId, messageId, cleanReply);
+    
   } catch (error) {
     console.error('AI error:', error);
-    await replyToMessage(env, chatId, messageId, "Sorry, I'm having trouble right now. Please try again later.");
+    // Fallback response
+    await replyToMessage(env, chatId, messageId, "🎵 I'm your music assistant! To request a song, type: I want [Artist] - [Album]");
   }
 }
 
@@ -104,20 +104,18 @@ async function addRequestToQueue(env, groupId, replyToMsgId, userId, username, f
   
   // Create table if needed
   try {
-    await db.prepare("SELECT 1 FROM requests LIMIT 1").run();
+    await db.prepare("CREATE TABLE IF NOT EXISTS requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_tg_id TEXT NOT NULL,
+      user_name TEXT,
+      artist TEXT,
+      album_name TEXT,
+      queue_number INTEGER,
+      status TEXT DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )").run();
   } catch (e) {
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_tg_id TEXT NOT NULL,
-        user_name TEXT,
-        artist TEXT,
-        album_name TEXT,
-        queue_number INTEGER,
-        status TEXT DEFAULT 'pending',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
+    // Table might already exist
   }
   
   const pendingCount = await db.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").first();
