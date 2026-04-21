@@ -1,3 +1,4 @@
+Let's just get back to this one 
 // Single file bot - Zambian Music Updates
 export default {
   async fetch(request, env, ctx) {
@@ -233,7 +234,7 @@ async function handleUpdate(update, env) {
     return;
   }
   
-  // List albums
+  // List albums with new domain
   if (text === '/listalbums') {
     const db = env.DB;
     const albums = await db.prepare('SELECT id, name, artist_id FROM albums ORDER BY id').all();
